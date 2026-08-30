@@ -1,55 +1,123 @@
-# GymVibe: Personalized Music for Your Workout 🏋️‍♂️
+# GymVibe — Context-Aware Hybrid Music Recommender 🏋️‍♂️
 
-**GymVibe** is a recommendation system that picks the best songs for your workout. It understands the vibe of your training session and your personal musical taste.
+GymVibe is a two-stage recommender that selects music for a workout based on the current workout context and the user's preferred tempo.
 
-### Evolution of the Project
-This project is an advanced extension of the [Gym Vibe Archetype Classifier](https://github.com/sweeteri/gym-vibe-archetype-classifier). 
-*   **Original Project:** Focused on classifying songs into "Vibes" (archetypes).
-*   **Current Project:** Uses those vibes as a starting point to build a **Personalized Ranking System** that predicts which songs you will actually like during your workout.
+The project extends my [Gym Vibe Archetype Classifier](https://github.com/sweeteri/gym-vibe-archetype-classifier): the original project classified tracks into seven workout-oriented music archetypes, while GymVibe uses these archetypes as context for personalized recommendations.
 
----
+> **Data note:** the original dataset contains track features, but no real user interactions. For this experiment, I generate synthetic implicit-feedback logs with controlled dependencies on workout context and BPM. Therefore, the reported metrics are benchmarks for this experimental setup, not production metrics.
 
 ## How it works
 
-1.  **Step 1: Selection (Retrieval)**
-    **Neural Network (Two-Tower model)** is used to filter the library and find songs that match the specific gym "vibe" you want (e.g., only "Boss Fight" music).
-    
-2.  **Step 2: Sorting (Ranking)**
-    **CatBoost** is used to sort those songs. It looks at your favorite tempo (BPM) and your past likes to put the best songs at the very top of your list.
+```text
+Workout context + preferred BPM ──► User Tower ─┐
+                                                ├─ similarity ─► Top-K candidates
+Track audio/text features ────────► Item Tower ─┘
+                                                               │
+                         context, genre, BPM, item features,
+                              neural similarity score
+                                                               ▼
+                                                CatBoostRanker (YetiRank)
+                                                               ▼
+                                                        Final Top-N tracks
+```
 
----
+### Retrieval — Two-Tower / DSSM
 
-## The 7 Gym "Vibes" (Archetypes)
-The music was categorized into 7 psychological profiles to match your training:
+The PyTorch model maps users and tracks into the same embedding space.
 
-1.  **Zen / Lo-Fi Recovery** – Relaxing beats for Yoga or stretching.
-2.  **Pilates Girl** – Chill R&B and smooth rhythms.
-3.  **Golden Era (Old School)** – 80s rock and action movie energy.
-4.  **Street Vibe** – Gritty street rap and deep bass.
-5.  **Sigma Grindset** – Dark synth-pop and "lone wolf" vibes.
-6.  **Boss Fight / Doom Slayer** – High-intensity metal and epic choirs.
-7.  **Pure Rage / Metalhead** – Maximum aggression for your heaviest lifts.
+**User features:**
 
----
+* preferred BPM
+* workout archetype (one-hot)
 
-## Smart Features
-To understand the music better, custom metrics were created:
-*   **Power Index:** Measures how "energetic" a song feels based on speed and volume.
-*   **Street Score:** Analyzes lyrics to find "street/thug" culture vibes.
-*   **Personal BPM:** Learns the specific speed of music you prefer while training.
+**Track features:**
 
----
+* BPM
+* loudness (`gain`)
+* lyric word count
+* word density
+* `Power Index`
+* `Street Score`
 
-## Performance & Results
+The model uses an in-batch contrastive objective: the observed user–track interaction is treated as positive, while other items in the batch provide negatives.
 
-*   **NDCG@5: 0.2055** — High ranking quality; the most relevant songs consistently appear at the top of the recommendations.
-*   **Retrieval Loss: 0.3396** — The "Two-Tower" neural network successfully learned to map user preferences to audio features.
-*   **Key Insight** — Feature Importance analysis proves that combining **Neural Scores** with **Gym Context** creates the most accurate recommendations.
----
+The full catalogue is scored by embedding similarity and the top 50 tracks are passed to the ranking stage.
+
+### Ranking — CatBoost
+
+CatBoostRanker with `YetiRank` re-ranks the retrieved candidates using:
+
+* neural similarity score;
+* workout context;
+* genre;
+* preferred BPM;
+* audio/text features.
+
+`session_id` is used as the ranking group and `like` as the relevance label.
+
+## Workout Archetypes
+
+The seven contexts come from the original classifier project:
+
+* Boss Fight / Doom Slayer
+* Zen / Lo-Fi Recovery
+* Golden Era (Old School)
+* Pilates Girl
+* Pure Rage / Metalhead
+* Sigma Grindset
+* Пацанский Вайб
+
+## Features
+
+A few custom features are used to describe the tracks:
+
+* **Power Index** — simple energy proxy based on BPM and loudness.
+* **Street Score** — count of predefined street-culture markers in lyrics.
+* **Word Density** — lyric word count divided by track duration.
+
+## Offline Evaluation
+
+The notebook uses a **user-level train/test split**, so test users are not present during training.
+
+Current experiment:
+
+| Metric              |     Result |
+| ------------------- | ---------: |
+| Retrieval Recall@50 | **0.2781** |
+| Ranking NDCG@5      | **0.5633** |
+| Context Hit Rate@5  | **0.8450** |
+
+**Recall@50** is evaluated against the full catalogue and measures how many positive tracks are retrieved by the Two-Tower model.
+
+**NDCG@5** is evaluated on the displayed candidate sets and measures how well CatBoost orders those candidates.
+
+**Context Hit Rate@5** is an additional sanity check showing whether the final recommendations match the requested workout context. It is not used as the main relevance metric.
+
+Exact values may vary with the random seed, generated synthetic logs, and package versions.
+
+## Run
+
+```bash
+python -m venv .venv
+
+# Windows PowerShell
+.venv\Scripts\activate
+
+pip install -r requirements.txt
+
+jupyter notebook recsys_songs_gym.ipynb
+```
+
+Run all notebook cells to generate the logs, train both stages, evaluate the model, inspect recommendations, feature importance, and t-SNE embeddings.
 
 ## Tech Stack
-*   **Python** (Data processing)
-*   **PyTorch** (Neural Network for finding songs)
-*   **CatBoost** (Smart ranking of songs)
-*   **NLP** (Analyzing song lyrics)
-*   **Matplotlib & Seaborn** (Charts and visuals)
+
+Python · PyTorch · CatBoost · scikit-learn · pandas · NumPy · Matplotlib · Seaborn
+
+## Limitations
+
+This is a portfolio prototype rather than a production recommender.
+
+The main limitations are synthetic feedback, a small catalogue, and the absence of real listening history.
+
+A production version could use timestamped interactions, temporal splits, richer user histories, hard-negative mining, approximate nearest-neighbor retrieval, online A/B testing, and diversity/novelty metrics.
